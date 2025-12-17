@@ -3,9 +3,9 @@ import pandas as pd
 import numpy as np
 import pickle
 import os
+import matplotlib.pyplot as plt
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
-from sklearn.model_selection import train_test_split
 
 # --- Page Config ---
 st.set_page_config(page_title="Fake News Detector", layout="centered")
@@ -29,17 +29,17 @@ page_bg_css = """
 
 /* Container for main content to ensure readability */
 .block-container {
-    background-color: rgba(255, 255, 255, 0.85);
+    background-color: rgba(255, 255, 255, 0.9);
     padding: 2rem;
     border-radius: 15px;
     box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-    margin-top: 50px;
+    margin-top: 30px;
 }
 
 /* FORCE DARK TEXT THEME */
-h1, h2, h3, h4, h5, h6, p, label, .stMarkdown, .stText, span {
+h1, h2, h3, h4, h5, h6, p, label, .stMarkdown, .stText, span, div {
     color: #1a1a1a !important;
-    font-family: 'Times New Roman', Times, serif; /* Newspaper font */
+    font-family: 'Times New Roman', Times, serif;
 }
 
 /* Button Styling */
@@ -48,6 +48,7 @@ h1, h2, h3, h4, h5, h6, p, label, .stMarkdown, .stText, span {
     color: white !important;
     border-radius: 5px;
     width: 100%;
+    font-weight: bold;
 }
 .stButton>button:hover {
     background-color: #333333;
@@ -65,18 +66,12 @@ h1, h2, h3, h4, h5, h6, p, label, .stMarkdown, .stText, span {
 st.markdown(page_bg_css, unsafe_allow_html=True)
 
 # --- App Title ---
-st.title("📰 Fake News Detector")
-st.markdown("### Paste a news article below to verify its authenticity.")
+st.title("📰 Fake News Probability Detector")
+st.markdown("### Paste a news article below to analyze its probability.")
 
 # --- Model Loading / Training Logic ---
 @st.cache_resource
 def load_or_train_model():
-    """
-    Tries to load saved .pkl files. 
-    If not found, retrains the model using True.csv and Fake.csv 
-    (replicating the logic from the PDF).
-    """
-    
     # Paths to files
     model_path = "fake_news_model.pkl"
     vec_path = "vectorizer.pkl"
@@ -91,38 +86,30 @@ def load_or_train_model():
             with open(vec_path, 'rb') as f:
                 vectorizer = pickle.load(f)
             return model, vectorizer
-        except Exception as e:
-            st.warning("Found .pkl files but couldn't load them. Retraining...")
+        except Exception:
+            pass
 
-    # 2. Train if .pkl files are missing (Logic from PDF Page 7-10)
+    # 2. Train if .pkl files are missing
     if os.path.exists(true_csv) and os.path.exists(fake_csv):
-        with st.spinner('Training model on local CSV files... (This happens once)'):
-            # Load Data
+        with st.spinner('Training model on local CSV files...'):
             true_df = pd.read_csv(true_csv)
             fake_df = pd.read_csv(fake_csv)
             
-            # Assign Labels (Page 4 & 8 of PDF)
             true_df['label'] = 1 # Real
             fake_df['label'] = 0 # Fake
             
-            # Concatenate and Shuffle (Page 7 of PDF)
             df = pd.concat([true_df, fake_df])
             df = df.sample(frac=1).reset_index(drop=True)
             
-            # Features and Target
             X = df['text']
             y = df['label']
             
-            # Vectorization (Page 9 of PDF)
-            # using stop_words='english' and max_df=0.7
             vectorizer = TfidfVectorizer(stop_words='english', max_df=0.7)
             X_vectorized = vectorizer.fit_transform(X)
             
-            # Train Model (Page 10 of PDF)
             model = MultinomialNB()
             model.fit(X_vectorized, y)
             
-            # Save for next time (Page 12 of PDF)
             with open(model_path, "wb") as f:
                 pickle.dump(model, f)
             with open(vec_path, "wb") as f:
@@ -132,35 +119,79 @@ def load_or_train_model():
     else:
         return None, None
 
-# Load the model
 model, vectorizer = load_or_train_model()
 
 # --- Main UI ---
 if model is None:
-    st.error("⚠️ Model files not found!")
-    st.info("Please ensure `True.csv` and `Fake.csv` are in the same folder as this app, OR place the `fake_news_model.pkl` and `vectorizer.pkl` generated from your notebook here.")
+    st.error("⚠️ Model files not found! Please upload True.csv and Fake.csv.")
 else:
     # User Input
-    news_text = st.text_area("Enter News Text:", height=200, placeholder="Type or paste the article content here...")
+    news_text = st.text_area("Enter News Text:", height=150, placeholder="Paste article content here...")
 
-    if st.button("Analyze News"):
+    if st.button("Analyze Probability"):
         if news_text.strip():
-            # Transform input (Page 11 of PDF)
+            # 1. Transform input
             input_vector = vectorizer.transform([news_text])
-            prediction = model.predict(input_vector)
+            
+            # 2. Get Probabilities (Index 0 = Fake, Index 1 = Real)
+            probabilities = model.predict_proba(input_vector)[0]
+            prob_fake = probabilities[0]
+            prob_real = probabilities[1]
+            
+            # 3. Determine Winner
+            prediction = np.argmax(probabilities)
             
             st.divider()
             
-            # Result Display
-            if prediction[0] == 1:
-                st.success("✅ **REAL NEWS**")
-                st.markdown("The model predicts this article is **Trustworthy**.")
-            else:
-                st.error("❌ **FAKE NEWS**")
-                st.markdown("The model predicts this article is **Unreliable**.")
+            # 4. Display Text Result
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                if prediction == 1:
+                    st.success(f"✅ **Prediction: REAL NEWS**")
+                    st.write(f"Confidence: **{prob_real*100:.2f}%**")
+                    st.markdown("The model detected patterns consistent with verified news sources.")
+                else:
+                    st.error(f"❌ **Prediction: FAKE NEWS**")
+                    st.write(f"Confidence: **{prob_fake*100:.2f}%**")
+                    st.markdown("The model detected patterns consistent with unverified or fake sources.")
+
+            # 5. Graphing Logic (Donut Chart)
+            with col2:
+                st.markdown("**Probability Breakdown**")
+                
+                # Setup Plot
+                labels = ['Fake', 'Real']
+                sizes = [prob_fake, prob_real]
+                colors = ['#ff4b4b', '#4caf50'] # Red for Fake, Green for Real
+                explode = (0.05, 0.05) 
+                
+                fig, ax = plt.subplots(figsize=(3, 3))
+                # Transparent background for the figure
+                fig.patch.set_alpha(0) 
+                
+                # Create Pie/Donut
+                wedges, texts, autotexts = ax.pie(
+                    sizes, 
+                    colors=colors, 
+                    labels=labels, 
+                    autopct='%1.1f%%', 
+                    startangle=90, 
+                    pctdistance=0.85, 
+                    explode=explode,
+                    textprops={'color':"black", 'fontsize': 10, 'weight':'bold'}
+                )
+                
+                # Draw a white circle at center to make it a donut
+                centre_circle = plt.Circle((0,0),0.70,fc='white')
+                fig.gca().add_artist(centre_circle)
+                
+                ax.axis('equal')  
+                st.pyplot(fig, use_container_width=False)
+                
         else:
             st.warning("Please enter some text to analyze.")
 
 # --- Footer ---
 st.markdown("---")
-st.markdown("Based on Multinomial Naive Bayes Model | Accuracy ~93%")
+st.markdown("Probability calculated using Multinomial Naive Bayes `predict_proba`.")
